@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tube Audio</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f6f5f2;--card:#fff;--text:#1c1b1a;--muted:#6f6c68;--accent:#e5383b;--line:#e3e0db;--chip:#efece7}
+:root:not([data-theme="light"]){}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#151413;--card:#201f1d;--text:#f1efec;--muted:#9a968f;--line:#33312e;--chip:#2b2927}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#151413;--card:#201f1d;--text:#f1efec;--muted:#9a968f;--line:#33312e;--chip:#2b2927}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh}
+main{max-width:520px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:1.3rem;margin:0 0 16px;letter-spacing:-.01em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin-bottom:16px}
+.row{display:flex;gap:8px}
+input[type=text]{flex:1;min-width:0;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:1rem}
+button{font:inherit;cursor:pointer;border:0;color:var(--text)}
+.go{background:var(--accent);color:#fff;padding:0 18px;border-radius:12px;font-weight:600}
+.err{color:var(--accent);font-size:.85rem;margin:8px 0 0;min-height:1em}
+#yt{position:absolute;left:-9999px;width:200px;height:113px;border:0}
+.title{font-weight:600;font-size:1.05rem;min-height:2.6em;line-height:1.3;word-break:break-word}
+.bar{width:100%;accent-color:var(--accent);margin:8px 0 2px}
+.times{display:flex;justify-content:space-between;color:var(--muted);font-size:.78rem}
+.ctrls{display:flex;align-items:center;justify-content:space-between;margin-top:14px}
+.ic{width:46px;height:46px;border-radius:50%;background:var(--chip);font-size:1.15rem;display:grid;place-items:center}
+.ic.on{background:var(--accent);color:#fff}
+.play{width:64px;height:64px;background:var(--accent);color:#fff;font-size:1.5rem}
+.spd{font-weight:600;font-size:.9rem}
+.star.on{color:#f5b301}
+h2{font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+.fav{display:flex;align-items:center;gap:8px;padding:10px 0;border-top:1px solid var(--line)}
+.fav:first-of-type{border-top:0}
+.fav button.t{flex:1;text-align:left;background:none;font-size:.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fav button.x{background:none;color:var(--muted);font-size:1.1rem}
+.empty{color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>🎧 Tube Audio</h1>
+  <div class="card">
+    <div class="row">
+      <input id="url" type="text" placeholder="Paste a YouTube link…" autocomplete="off">
+      <button class="go" id="load">Play</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="card">
+    <div class="title" id="title">Nothing playing yet</div>
+    <input class="bar" id="seek" type="range" min="0" max="100" value="0" step="0.1">
+    <div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+    <div class="ctrls">
+      <button class="ic spd" id="speed" title="Speed">1×</button>
+      <button class="ic play" id="pp" title="Play / pause">▶</button>
+      <button class="ic" id="loop" title="Loop">🔁</button>
+      <button class="ic star" id="star" title="Favorite">☆</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>★ Favorites</h2>
+    <div id="favs"></div>
+  </div>
+</main>
+<iframe id="yt" allow="autoplay; encrypted-media" title="audio"></iframe>
+
+<script>
+const $ = id => document.getElementById(id);
+const frame = $('yt');
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+let st = { id: null, title: '', playing: false, loop: false, speedIdx: 2, dur: 0, cur: 0, seeking: false };
+let gotInfo = false, watchdog = null;
+let favs = [];
+try { favs = JSON.parse(localStorage.getItem('ta-favs') || '[]'); } catch (e) {}
+const saveFavs = () => { try { localStorage.setItem('ta-favs', JSON.stringify(favs)); } catch (e) {} };
+
+const send = (func, args = []) =>
+  frame.contentWindow && frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
+
+const fmt = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+
+function parseId(u) {
+  u = u.trim();
+  if (/^[\w-]{11}$/.test(u)) return u;
+  const m = u.match(/(?:youtu\.be\/|v=|\/embed\/|\/shorts\/|\/live\/)([\w-]{11})/);
+  return m ? m[1] : null;
+}
+
+function load(id) {
+  st.id = id; st.title = 'Loading…'; st.dur = 0; st.cur = 0;
+  gotInfo = false; $('err').textContent = '';
+  frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+  let q = 'enablejsapi=1&autoplay=1&playsinline=1&rel=0';
+  if (/^https?:$/.test(location.protocol)) q += '&origin=' + encodeURIComponent(location.origin);
+  frame.src = 'https://www.youtube.com/embed/' + id + '?' + q;
+  clearTimeout(watchdog);
+  watchdog = setTimeout(() => {
+    if (!gotInfo) { st.title = 'Couldn’t load this video'; $('err').textContent = 'The player didn’t respond. The video may block embedding, or this page may be blocking YouTube. Try another link.'; render(); }
+  }, 9000);
+  render();
+}
+
+frame.addEventListener('load', () => {
+  // Subscribe to player events, retrying briefly until the player is ready
+  let n = 0;
+  const t = setInterval(() => {
+    frame.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*');
+    if (++n > 12) clearInterval(t);
+  }, 400);
+  setTimeout(() => send('setPlaybackRate', [SPEEDS[st.speedIdx]]), 1500);
+});
+
+window.addEventListener('message', e => {
+  if (e.source !== frame.contentWindow) return;
+  let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data; } catch (_) { return; }
+  if (!d) return;
+  if (d.event === 'onError') { gotInfo = true; clearTimeout(watchdog); st.title = 'Couldn’t play this video'; $('err').textContent = d.info == 153
+      ? 'YouTube error 153: it couldn’t verify where this page is running. Open the app from http://localhost or an https:// site (not a file:// path or a sandboxed preview).'
+      : 'YouTube error ' + d.info + ': this video doesn’t allow embedded playback (or the ID is wrong). Try another link.'; render(); return; }
+  if (d.event === 'initialDelivery' || d.event === 'infoDelivery' || d.event === 'onReady') { gotInfo = true; clearTimeout(watchdog); }
+  if (d.event === 'onStateChange') onState(d.info);
+  if (d.event === 'infoDelivery' && d.info) {
+    const i = d.info;
+    if (i.videoData && i.videoData.title) st.title = i.videoData.title;
+    if (typeof i.duration === 'number') st.dur = i.duration;
+    if (typeof i.currentTime === 'number') st.cur = i.currentTime;
+    if (typeof i.playerState === 'number') onState(i.playerState);
+  }
+  render();
+});
+
+function onState(s) {
+  st.playing = s === 1 || s === 3;
+  if (s === 0) {
+    if (st.loop) { send('seekTo', [0, true]); send('playVideo'); }
+    else st.playing = false;
+  }
+}
+
+function render() {
+  $('title').textContent = st.title || 'Nothing playing yet';
+  $('pp').textContent = st.playing ? '⏸' : '▶';
+  $('loop').classList.toggle('on', st.loop);
+  $('speed').textContent = SPEEDS[st.speedIdx] + '×';
+  const isFav = favs.some(f => f.id === st.id);
+  $('star').textContent = isFav ? '★' : '☆';
+  $('star').classList.toggle('on', isFav);
+  $('cur').textContent = fmt(st.cur);
+  $('dur').textContent = fmt(st.dur);
+  if (!st.seeking) { $('seek').max = st.dur || 100; $('seek').value = st.cur; }
+  const box = $('favs');
+  box.innerHTML = '';
+  if (!favs.length) { box.innerHTML = '<div class="empty">Tap ☆ on a song to save it here.</div>'; return; }
+  favs.forEach(f => {
+    const row = document.createElement('div'); row.className = 'fav';
+    const t = document.createElement('button'); t.className = 't'; t.textContent = '★ ' + f.title;
+    t.onclick = () => load(f.id);
+    const x = document.createElement('button'); x.className = 'x'; x.textContent = '✕'; x.title = 'Remove';
+    x.onclick = () => { favs = favs.filter(z => z.id !== f.id); saveFavs(); render(); };
+    row.append(t, x); box.append(row);
+  });
+}
+
+$('load').onclick = () => {
+  const id = parseId($('url').value);
+  if (!id) { $('err').textContent = 'That doesn’t look like a YouTube link.'; return; }
+  $('err').textContent = ''; load(id);
+};
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') $('load').click(); });
+$('pp').onclick = () => { if (!st.id) return; send(st.playing ? 'pauseVideo' : 'playVideo'); st.playing = !st.playing; render(); };
+$('loop').onclick = () => { st.loop = !st.loop; render(); };
+$('speed').onclick = () => { st.speedIdx = (st.speedIdx + 1) % SPEEDS.length; send('setPlaybackRate', [SPEEDS[st.speedIdx]]); render(); };
+$('star').onclick = () => {
+  if (!st.id) return;
+  if (favs.some(f => f.id === st.id)) favs = favs.filter(f => f.id !== st.id);
+  else favs.push({ id: st.id, title: st.title && st.title !== 'Loading…' ? st.title : 'youtube.com/' + st.id });
+  saveFavs(); render();
+};
+$('seek').addEventListener('input', () => { st.seeking = true; $('cur').textContent = fmt($('seek').value); });
+$('seek').addEventListener('change', () => { send('seekTo', [parseFloat($('seek').value), true]); st.seeking = false; });
+
+// Keep the progress bar moving between player updates
+setInterval(() => { if (st.playing && !st.seeking) { st.cur += 0.5 * SPEEDS[st.speedIdx]; render(); } }, 500);
+render();
+</script>
+</body>
+</html>
