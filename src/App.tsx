@@ -20,6 +20,8 @@ export default function App() {
   const pending = useRef<string | null>(null);
   const loopRef = useRef(false);
   const rateRef = useRef(1);
+  const videoIdRef = useRef<string | null>(null);
+  const playingRef = useRef(false);
 
   const [input, setInput] = useState('');
   const [videoId, setVideoId] = useState<string | null>(null);
@@ -48,6 +50,87 @@ export default function App() {
     catch { setStorageError('Couldn’t save to browser storage. Favorites will be lost when you close this tab.'); }
   };
 
+  // Android/Chrome media notification and lock-screen controls.
+  // This exposes controls for the existing YouTube iframe; it does not bypass
+  // browser/YouTube background-playback restrictions.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    const session = navigator.mediaSession;
+
+    const safely = (name: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try { session.setActionHandler(name, handler); } catch { /* Action not supported by this browser. */ }
+    };
+
+    safely('play', () => { if (ready.current && videoIdRef.current) player.current?.playVideo(); });
+    safely('pause', () => { player.current?.pauseVideo(); });
+    safely('previoustrack', () => { player.current?.previousVideo?.(); });
+    safely('nexttrack', () => { player.current?.nextVideo?.(); });
+    safely('seekbackward', (details) => {
+      const current = Number(player.current?.getCurrentTime?.() ?? 0);
+      player.current?.seekTo?.(Math.max(0, current - (details.seekOffset ?? 10)), true);
+    });
+    safely('seekforward', (details) => {
+      const current = Number(player.current?.getCurrentTime?.() ?? 0);
+      const duration = Number(player.current?.getDuration?.() ?? Infinity);
+      player.current?.seekTo?.(Math.min(duration, current + (details.seekOffset ?? 10)), true);
+    });
+    safely('seekto', (details) => {
+      if (typeof details.seekTime === 'number') player.current?.seekTo?.(details.seekTime, true);
+    });
+
+    return () => {
+      (['play', 'pause', 'previoustrack', 'nexttrack', 'seekbackward', 'seekforward', 'seekto'] as MediaSessionAction[])
+        .forEach((action) => safely(action, null));
+    };
+  }, []);
+
+  // Keep Android's notification metadata and progress synchronized with YouTube.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    const session = navigator.mediaSession;
+    if (title && videoId) {
+      const author = player.current?.getVideoData?.().author || 'YouTube';
+      try {
+        session.metadata = new MediaMetadata({
+          title,
+          artist: author,
+          album: 'YouTube Listening Room',
+          artwork: [
+            { src: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`, sizes: '480x360', type: 'image/jpeg' },
+            { src: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`, sizes: '1280x720', type: 'image/jpeg' },
+          ],
+        });
+      } catch { /* MediaMetadata may be unavailable in older browsers. */ }
+    } else {
+      session.metadata = null;
+    }
+  }, [title, videoId]);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = playing ? 'playing' : (videoId ? 'paused' : 'none');
+  }, [playing, videoId]);
+
+  useEffect(() => {
+    if (!playing || !videoId || !('mediaSession' in navigator)) return;
+    const updatePosition = () => {
+      const duration = Number(player.current?.getDuration?.() ?? 0);
+      const position = Number(player.current?.getCurrentTime?.() ?? 0);
+      if (Number.isFinite(duration) && duration > 0 && Number.isFinite(position)) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration,
+            playbackRate: Number(player.current?.getPlaybackRate?.() ?? rateRef.current) || 1,
+            position: Math.min(position, duration),
+          });
+        } catch { /* Position state is optional and can be rejected by the browser. */ }
+      }
+    };
+    updatePosition();
+    const timer = window.setInterval(updatePosition, 1000);
+    return () => window.clearInterval(timer);
+  }, [playing, videoId]);
+
   // YouTube player
   useEffect(() => {
     let cancelled = false;
@@ -70,12 +153,14 @@ export default function App() {
               if (t) setTitle(t);
               setStatus('ready'); setError('');
             }
-            setPlaying(s === 1 || s === 3);
+            const isNowPlaying = s === 1 || s === 3;
+            playingRef.current = isNowPlaying;
+            setPlaying(isNowPlaying);
             if (s === 1) player.current.setPlaybackRate(rateRef.current);
             if (s === 0 && loopRef.current) { player.current.seekTo(0, true); player.current.playVideo(); }
           },
           onError: (e: any) => {
-            setStatus('error'); setPlaying(false);
+            setStatus('error'); playingRef.current = false; setPlaying(false);
             setError(PLAYER_ERRORS[e.data] ?? `YouTube couldn’t play this video (error ${e.data}).`);
           },
         },
@@ -85,6 +170,7 @@ export default function App() {
   }, []);
 
   const play = useCallback((id: string, listId: string | null = null, index: number | null = null) => {
+    videoIdRef.current = id;
     setVideoId(id); setCtx({ listId, index }); setTitle(''); setStatus('loading'); setError('');
     if (ready.current) player.current.loadVideoById(id); else pending.current = id;
   }, []);
@@ -148,7 +234,7 @@ export default function App() {
             ))}
           </div>
           <p className="note">
-            Playback happens in YouTube’s embedded player and stops when Chrome is backgrounded or the screen locks. “Open in YouTube” hands the video to the official app, where background play may need YouTube Premium. Once you leave this page, the controls here no longer affect that playback.
+            Android Chrome may show a media notification and lock-screen controls while this page is playing. Background playback of an embedded YouTube video is still controlled by YouTube, Chrome, and Android, so the notification cannot guarantee playback after you leave the page or lock your screen. Previous/next controls work when the loaded YouTube content provides a playlist.
           </p>
         </section>
 
