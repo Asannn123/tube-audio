@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState, FormEvent } from 'react';
-import { loadYouTubeApi, openUrl, parseVideoId, PLAYER_ERRORS } from './youtube';
+import { loadYouTubeApi, parseVideoId, parsePlaylist, PLAYER_ERRORS } from './youtube';
+import OpenInYouTube from './components/OpenInYouTube';
+import MobilePlaybackNotice from './components/MobilePlaybackNotice';
 
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const KEY = 'listening-room:favorites';
-type Fav = { id: string; title: string };
+type Fav = { id: string; title: string; listId?: string | null; index?: number | null };
 type Status = 'idle' | 'loading' | 'ready' | 'error';
 
 function readFavs(): Fav[] {
@@ -21,6 +23,7 @@ export default function App() {
 
   const [input, setInput] = useState('');
   const [videoId, setVideoId] = useState<string | null>(null);
+  const [ctx, setCtx] = useState<{ listId: string | null; index: number | null }>({ listId: null, index: null });
   const [title, setTitle] = useState('');
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState('');
@@ -81,8 +84,8 @@ export default function App() {
     return () => { cancelled = true; try { player.current?.destroy(); } catch {} player.current = null; ready.current = false; if (wrap.current) wrap.current.innerHTML = ''; };
   }, []);
 
-  const play = useCallback((id: string) => {
-    setVideoId(id); setTitle(''); setStatus('loading'); setError('');
+  const play = useCallback((id: string, listId: string | null = null, index: number | null = null) => {
+    setVideoId(id); setCtx({ listId, index }); setTitle(''); setStatus('loading'); setError('');
     if (ready.current) player.current.loadVideoById(id); else pending.current = id;
   }, []);
 
@@ -90,7 +93,8 @@ export default function App() {
     e.preventDefault();
     const id = parseVideoId(input);
     if (!id) { setStatus('error'); setError('That doesn’t look like a valid YouTube link. Try a watch, youtu.be, Shorts, embed, or live URL.'); return; }
-    play(id);
+    const { listId, index } = parsePlaylist(input);
+    play(id, listId, index);
   };
 
   const togglePlay = () => { if (!ready.current || !videoId) return; playing ? player.current.pauseVideo() : player.current.playVideo(); };
@@ -99,7 +103,7 @@ export default function App() {
   const isFav = !!videoId && favs.some((f) => f.id === videoId);
   const toggleFav = () => {
     if (!videoId) return;
-    saveFavs(isFav ? favs.filter((f) => f.id !== videoId) : [...favs, { id: videoId, title: title || `Untitled video (${videoId})` }]);
+    saveFavs(isFav ? favs.filter((f) => f.id !== videoId) : [...favs, { id: videoId, title: title || `Untitled video (${videoId})`, listId: ctx.listId, index: ctx.index }]);
   };
 
   return (
@@ -110,6 +114,8 @@ export default function App() {
       </header>
 
       <main>
+        <MobilePlaybackNotice action={videoId ? <OpenInYouTube videoId={videoId} playlistId={ctx.listId} playlistIndex={ctx.index} testId="notice-open-youtube" /> : undefined} />
+
         <section className="panel" aria-labelledby="h-in">
           <h2 id="h-in" className="mono label"><i>01</i> Input</h2>
           <form onSubmit={submit} className="row">
@@ -132,7 +138,8 @@ export default function App() {
             <button data-testid="play-pause" className="btn primary mono" onClick={togglePlay} disabled={!videoId || status === 'error'}>{playing ? 'PAUSE' : 'PLAY'}</button>
             <button data-testid="loop-toggle" className={'btn mono' + (loop ? ' on' : '')} aria-pressed={loop} onClick={toggleLoop}>LOOP {loop ? 'ON' : 'OFF'}</button>
             <button data-testid="favorite-toggle" className={'btn mono' + (isFav ? ' on mag' : '')} aria-pressed={isFav} onClick={toggleFav} disabled={!videoId}>{isFav ? '★ KEPT' : '☆ KEEP'}</button>
-            {videoId && <a data-testid="open-youtube" className="btn mono" href={openUrl(videoId)} target="_blank" rel="noopener noreferrer">OPEN IN YOUTUBE ↗</a>}
+            {videoId && <OpenInYouTube videoId={videoId} playlistId={ctx.listId} playlistIndex={ctx.index} testId="open-youtube" />}
+            {ctx.listId && <OpenInYouTube playlistId={ctx.listId} label="Open playlist" testId="open-playlist" />}
           </div>
           <div className="rates" role="group" aria-label="Playback speed">
             <span className="mono dim">SPEED</span>
@@ -154,8 +161,8 @@ export default function App() {
             <ul className="favs" data-testid="favorites-list">
               {favs.map((f) => (
                 <li key={f.id}>
-                  <button data-testid={`fav-play-${f.id}`} className="fav-title" onClick={() => play(f.id)}>{f.title}</button>
-                  <a data-testid={`fav-open-${f.id}`} className="btn small mono" href={openUrl(f.id)} target="_blank" rel="noopener noreferrer">YOUTUBE ↗</a>
+                  <button data-testid={`fav-play-${f.id}`} className="fav-title" onClick={() => play(f.id, f.listId ?? null, f.index ?? null)}>{f.title}</button>
+                  <OpenInYouTube videoId={f.id} playlistId={f.listId} playlistIndex={f.index} label="YouTube" small testId={`fav-open-${f.id}`} />
                   <button data-testid={`fav-remove-${f.id}`} className="btn small mono" aria-label={`Remove ${f.title}`} onClick={() => saveFavs(favs.filter((x) => x.id !== f.id))}>REMOVE</button>
                 </li>
               ))}

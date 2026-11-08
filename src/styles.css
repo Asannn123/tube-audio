@@ -39,3 +39,9 @@ input::placeholder{color:var(--dim)}
 .fav-title:hover{color:var(--g)}
 @media (max-width:520px){.row{flex-direction:column}.favs li{flex-wrap:wrap}.fav-title{flex-basis:100%;white-space:normal}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+.yt-ico{width:20px;height:20px;margin-right:8px;flex:none}
+.btn.small .yt-ico{width:16px;height:16px;margin-right:6px}
+.notice{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--c);border-left-width:4px;background:rgba(101,248,255,.06);padding:12px 14px;margin-bottom:18px;font-size:.88rem}
+.notice .body{flex:1;min-width:0}
+.notice p{margin:0 0 10px}
+.notice strong{color:var(--c)}

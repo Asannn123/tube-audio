@@ -43,13 +43,12 @@ export const PLAYER_ERRORS: Record<number, string> = {
   153: 'YouTube couldn’t verify where this page runs. Open it from an https:// site or localhost.',
 };
 
-export const watchUrl = (id: string) => `https://www.youtube.com/watch?v=${id}`;
-
-// Android: try the official YouTube app, fall back to the regular URL. Elsewhere: regular URL.
-export function openUrl(id: string): string {
-  const web = watchUrl(id);
-  if (/android/i.test(navigator.userAgent)) {
-    return `intent://www.youtube.com/watch?v=${id}#Intent;scheme=https;package=com.google.android.youtube;S.browser_fallback_url=${encodeURIComponent(web)};end`;
-  }
-  return web;
+export function parsePlaylist(raw: string): { listId: string | null; index: number | null } {
+  try {
+    const t = raw.trim();
+    const u = new URL(/^[a-z]+:\/\//i.test(t) ? t : 'https://' + t);
+    const list = u.searchParams.get('list');
+    const idx = parseInt(u.searchParams.get('index') ?? '', 10);
+    return { listId: list && /^[\w-]{10,64}$/.test(list) ? list : null, index: idx > 0 ? idx : null };
+  } catch { return { listId: null, index: null }; }
 }
